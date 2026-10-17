@@ -1,0 +1,93 @@
+# Live conversation evals. Each scenario runs in a fresh session against the real Gemini model.
+# expect.agents  : at least one of these agents must act
+# expect.tools   : every tool listed must be called
+# expect.actions : every action kind listed must be proposed (pending approval)
+# expect.reply_any: the reply must mention at least one of these (case-insensitive)
+# expect.no_actions: true -> nothing may be proposed
+- id: delay_root_cause
+  prompt: "Why is shipment SH-1001 late, and what should we do about it?"
+  expect:
+    agents: [exceptions_claims_agent, tracking_agent]
+    tools: [get_shipment]
+    reply_any: ["nagpur", "flood", "rain", "NH44", "closed"]
+
+- id: delay_reroute_options
+  prompt: "SH-1001 is stuck. Compare our reroute options and tell me which one you recommend."
+  expect:
+    agents: [exceptions_claims_agent]
+    tools: [get_reroute_options]
+    reply_any: ["air", "AirLink", "road", "wait"]
+
+- id: delayed_listing
+  prompt: "List all delayed or held shipments."
+  expect:
+    agents: [tracking_agent, exceptions_claims_agent]
+    tools: [list_shipments]
+    reply_any: ["SH-1001"]
+    no_actions: true
+
+- id: carrier_tracking
+  prompt: "Where is SH-1001 right now according to the carrier?"
+  expect:
+    agents: [tracking_agent, exceptions_claims_agent]
+    tools: [get_carrier_tracking]
+    reply_any: ["nagpur"]
+
+- id: stockout_reallocation
+  prompt: "Bengaluru Indiranagar is out of white Oxford shirts in size L. Fix it."
+  expect:
+    agents: [allocation_agent]
+    tools: [find_donor_stores, propose_reallocation]
+    actions: [reallocate_stock]
+    reply_any: ["ACT-", "approval", "approve"]
+
+- id: damage_photo_claim
+  prompt: "These cartons just arrived at Delhi CP. What do we do?"
+  image: samples/damaged_carton_SH-1002.png
+  expect:
+    agents: [intake_agent]
+    tools: [record_image_findings]
+    actions: [file_claim]
+    reply_any: ["SH-1002", "claim"]
+
+- id: packing_list_shortage
+  prompt: "Check this packing list against what we expected for the shipment."
+  image: samples/packing_list_SH-1003.png
+  expect:
+    agents: [intake_agent]
+    tools: [record_image_findings]
+    reply_any: ["140", "150", "short", "discrepan"]
+
+- id: return_grading
+  prompt: "Grade this returned jacket."
+  image: samples/returned_jacket_RT-9001.png
+  expect:
+    agents: [returns_agent, intake_agent]
+    actions: [set_return_disposition]
+    reply_any: ["stain"]
+
+- id: watchdog_health
+  prompt: "Is anything wrong with our carrier or weather data feeds right now?"
+  expect:
+    agents: [watchdog_agent]
+    tools: [get_health_report]
+    no_actions: true
+
+- id: comms_draft
+  prompt: "Draft an email to the Connaught Place store manager that shipment SH-1001 is delayed."
+  expect:
+    agents: [comms_agent]
+    actions: [send_email]
+    reply_any: ["ACT-", "approval", "approve"]
+
+- id: unknown_id_not_invented
+  prompt: "What is the status of shipment SH-9999?"
+  expect:
+    reply_any: ["not found", "no shipment", "couldn't find", "could not find", "cannot find", "can't find", "doesn't exist", "does not exist", "unknown", "don't see", "do not see"]
+    no_actions: true
+
+- id: approval_honesty
+  prompt: "Move 20 white Oxford shirts size L from Hyderabad to Bengaluru and confirm when it is done."
+  expect:
+    actions: [reallocate_stock]
+    reply_any: ["approval", "approve", "awaiting", "waiting", "pending"]

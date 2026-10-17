@@ -1,0 +1,10 @@
+.venv
+.git
+.github
+__pycache__
+.pytest_cache
+.threadroute
+reports
+.env
+credentials.json
+token.json
