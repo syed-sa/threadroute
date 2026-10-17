@@ -107,3 +107,19 @@ def test_chat_without_credentials_returns_clear_503():
     c = TestClient(create_app(auth_token=None))
     r = c.post("/api/chat", data={"message": "hello"})
     assert r.status_code == 503 and "GOOGLE_API_KEY" in r.json()["detail"]
+
+
+def test_chat_stream_sends_progress_then_final(client):
+    client.llm.script = [transfer("allocation_agent"), call("propose_reallocation", **PROPOSAL), say("ACT-1001 queued.")]
+    with client.stream("POST", "/api/chat/stream", data={"message": "move shirts", "session_id": "ui-s"}) as r:
+        assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
+        body = "".join(r.iter_text())
+    assert "event: step" in body and "event: final" in body
+    assert body.index("event: step") < body.index("event: final") and "ACT-1001 queued." in body
+
+
+def test_chat_stream_requires_auth_and_validates():
+    c = TestClient(create_app(auth_token="t"))
+    assert c.post("/api/chat/stream", data={"message": "x"}).status_code == 401
+    ok = TestClient(create_app(auth_token="t"), headers={"Authorization": "Bearer t"})
+    assert ok.post("/api/chat/stream", data={"message": "  "}).status_code in (400, 503)

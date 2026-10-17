@@ -76,6 +76,9 @@ def _claim_email(shipment: dict, claim: dict, p: dict) -> tuple[str, str]:
 
 async def execute(kind: str, payload: dict) -> dict:
     """Returns {"status": "executed"|"failed", "steps": [...], "result": {...}}."""
+    from threadroute.perf.cache import invalidate
+
+    invalidate()  # an executed action changes world state; never serve cached lookups across it
     steps: list[dict] = []
 
     def step(name: str, ok: bool, detail) -> None:

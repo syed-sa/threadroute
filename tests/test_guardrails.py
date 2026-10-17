@@ -33,7 +33,7 @@ def test_detectors_find_each_kind_and_mask_it():
     aadhaar = pii.verhoeff_make("23456789012")
     text = (f"Customer name: Aarav Menon phone +91 90000 01234 email a.m@example.org Aadhaar {aadhaar} "
             "PAN ABCDE1234F card 4111 1111 1111 1111 Flat 12, Gandhi Road, Pune pin code 411001 DOB: 01/02/1990 "
-            "Mr Rahul Verma key=AIzaSyA1234567890abcdefghijklmnopqrstuv")
+            "Mr Rahul Verma key=" + "AIza" + "SyA1234567890abcdefghijklmnopqrstuv")
     kinds = {f.kind for f in pii.scan(text)}
     assert {"PERSON", "PHONE", "EMAIL", "AADHAAR", "PAN", "CARD", "ADDRESS", "PINCODE", "DOB", "SECRET"} <= kinds
     clean, _ = pii.redact(text)

@@ -1,5 +1,5 @@
 # Core agent stack (Google Agent Development Kit + Gemini)
-google-adk[mcp]>=2.12,<3
+google-adk[mcp,a2a]>=2.12,<3
 google-genai>=2.0,<3
 # MCP: pinned to the 1.x line (FastMCP API). 2.x renamed the server class.
 mcp>=1.24,<2

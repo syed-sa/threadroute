@@ -107,3 +107,57 @@ flowchart LR
 * **Idempotent proposals.** Identical pending proposals in a session collapse into one.
 * **No secrets in code.** Keys come from `.env` / environment; `.env`, tokens and databases are git-ignored.
 * **Untrusted content.** Text read from photos is treated as data; the agents verify ids against the WMS before proposing anything, and anything with side effects still needs a human.
+
+## 6. Guardrails: the egress choke point
+
+Every boundary calls the same function, `guardrails.egress.protect(destination, obj)`, so there is one place to audit and one place that can be wrong.
+
+```mermaid
+flowchart LR
+    U([User]) -->|text| IN["protect(user_in)<br/>PII redacted"]
+    IMG[Photo] --> SAN["sanitize_image<br/>decode, strip EXIF, downscale"]
+    IN & SAN --> M[(Gemini)]
+    T[Tool / MCP result] --> N["neutralise injections<br/>redact PII, compact"] --> M
+    M -->|output| R["redact"] --> V{{"grounding check<br/>vs tool evidence + database"}}
+    V -- ok --> OUT["protect(user_reply)"] --> U
+    V -- unsupported claim --> RETRY["1 corrective retry"] --> V2{{check again}}
+    V2 -- ok --> OUT
+    V2 -- still bad --> STRIP["strip unverifiable sentences"] --> OUT
+    P[propose_email / sheets / A2A] --> E["protect(email | sheets | a2a_out)<br/>recipient allow-list"]
+```
+
+Redaction is one-way (placeholders like `[EMAIL_1]`; the vault keeps hashes only), so nothing downstream can reconstruct a value. The audit counters record *kinds and counts*, never values.
+
+## 7. A2A: two agents, two owners
+
+```mermaid
+sequenceDiagram
+    participant EX as exceptions_claims_agent (ThreadRoute)
+    participant C as CarrierPeer (client)
+    participant H as Carrier-desk agent (A2A server :8101)
+    EX->>C: ask_carrier_agent("quote air for SH-1001")
+    C->>C: redact outbound text
+    C->>H: A2A message + Bearer token (agent card is public)
+    H->>H: its own tools: status / quote / claim assessment
+    H-->>C: reply + reference ids
+    C->>C: neutralise injections, redact inbound
+    C-->>EX: {reply, transport, references, degraded}
+```
+
+Transport chain with the same resilience treatment as every other dependency: `a2a_http` → `a2a_inprocess` (same protocol objects over an ASGI transport) → `local_policy` (flagged `degraded`). ThreadRoute can also be served as an A2A agent (`a2a-serve`).
+
+## 8. Evaluation architecture
+
+* `evaluation/claims.py` extracts checkable claims (ids, numbers + units, money in INR/lakh/crore, dates, "I did X" statements).
+* `evidence.py` records what the model was actually shown by tools in the current turn (post-redaction, post-compaction).
+* `evaluation/grounding.py::check` compares claims with (a) the evidence and the user's text → **groundedness**, (b) the database through `evaluation/oracle.py` → **truthfulness**, (c) the approval log → **false action claims**, and flags **fabricated ids** and **PII**. Allowed derivations (sums, differences, day counts, rounding) are accounted for.
+* `agents/runtime.py::_verify_and_repair` is the runtime guard (check → one retry → strip).
+* `evaluation/runner.py` is the offline/live harness; `evaluation/selftest.py` measures the checker itself; `evaluation/judge.py` is an optional LLM second opinion.
+
+## 9. Performance and token flow
+
+* **Hot path has no I/O beyond the model and tools:** timings go to bounded in-memory deques; resilience events/stats are queued to a background writer (flushed every 1.5 s, at exit and before any read); config and chaos probes are cached.
+* **Parallelism:** independent lookups run under `asyncio.gather` (reroute comparison); the MCP server is started once and shared by all agents, each keeping its own tool allow-list.
+* **Caching:** `perf/cache.py` caches only good carrier/weather/route answers for a short TTL and is cleared on every state change.
+* **Context size:** `optimize.py` normalises MCP results, drops nulls, truncates long lists and compacts history (old images and bulky old tool results) before each model call; `before_model` enforces the session token budget and the per-turn call cap.
+* **Accounting:** `perf/tokens.py` records real usage when the API reports it (chars/4 estimate otherwise, flagged) and prices it from `config/pricing.yaml`.

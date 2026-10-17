@@ -2,12 +2,24 @@ services:
   threadroute:
     build: .
     ports:
-      - "8000:8080"
+      - "127.0.0.1:8000:8080"          # published on localhost only; put a TLS proxy in front for anything else
     env_file:
       - .env
     environment:
       THREADROUTE_HOME: /data
+      # compose refuses to start without a token, so the UI is never exposed unauthenticated by accident
+      THREADROUTE_AUTH_TOKEN: ${THREADROUTE_AUTH_TOKEN:?set THREADROUTE_AUTH_TOKEN in your shell or .env}
+      # hostnames the UI may be reached by (Host-header allow-list); localhost is always allowed
+      THREADROUTE_ALLOWED_HOSTS: ${THREADROUTE_ALLOWED_HOSTS:-}
     volumes:
       - threadroute-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
 volumes:
   threadroute-data:

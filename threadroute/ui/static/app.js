@@ -80,6 +80,29 @@ function botExtras(res) {
     fb.replaceChildren(box, go); box.focus(); } }, 'No');
   fb.append(up, down); wrap.append(fb); return wrap;
 }
+// Streams progress (which agent / tool is running) while the answer is prepared; the final answer arrives only after
+// the guardrails and grounding check. Falls back to the plain endpoint if streaming is unavailable.
+async function chatStream(form, onStep) {
+  const r = await fetch('/api/chat/stream', { method: 'POST', body: form, headers: authHeaders() });
+  if (r.status === 401) throw new Error('Not authorised - open the URL printed by the server (it contains #token=...).');
+  if (r.status === 429) throw new Error('Too many requests - please wait a moment.');
+  if (!r.ok || !r.body) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || r.statusText); }
+  const reader = r.body.getReader(), dec = new TextDecoder(); let buf = '', final = null;
+  for (;;) {
+    const { done, value } = await reader.read(); if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const block = buf.slice(0, i); buf = buf.slice(i + 2);
+      const ev = (block.match(/^event: (.*)$/m) || [])[1], data = (block.match(/^data: (.*)$/m) || [])[1];
+      if (!ev || !data) continue;
+      const obj = JSON.parse(data);
+      if (ev === 'step') onStep(obj); else if (ev === 'final') final = obj; else if (ev === 'error') throw new Error(obj.detail);
+    }
+  }
+  if (!final) throw new Error('The connection closed before an answer arrived.');
+  return final;
+}
 async function send(text) {
   text = (text ?? $('#text').value).trim();
   if (!text && !attachedFile) return;
@@ -91,7 +114,11 @@ async function send(text) {
   $('#send').disabled = true;
   const thinking = addMsg('bot', '<span class="muted">Working... (agents are calling tools)</span>');
   try {
-    const res = await api('/api/chat', { method: 'POST', body: form });
+    const label = thinking.querySelector('span');
+    const res = await chatStream(form, st => {
+      if (label) label.textContent = st.type === 'transfer' ? 'Handing over to ' + (st.name === 'transfer_to_agent' ? 'a specialist agent' : st.name) + '...'
+        : 'Working: ' + (st.agent || 'agent') + ' is using ' + st.name + '...';
+    });
     thinking.remove();
     const m = addMsg('bot', `<div class="who">${esc(res.agent)}</div>` + md(res.reply), botExtras(res));
     if (res.new_actions.length) activate('approvals');

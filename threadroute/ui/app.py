@@ -8,6 +8,7 @@ add a Gemini key; /api/chat returns a clear 503 message until credentials exist.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -17,9 +18,9 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Path as PathParam, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from threadroute import __version__
@@ -31,6 +32,7 @@ from threadroute.guardrails import audit
 from threadroute.perf import tokens as tk
 from threadroute.perf.metrics import metrics
 from threadroute.resilience import breaker, chaos, watchdog
+from threadroute.resilience import store as rstore
 from threadroute.ui import security
 
 log = logging.getLogger("threadroute.web")
@@ -45,6 +47,7 @@ _UNSET = object()
 
 
 class ApproveBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # unknown fields are rejected, not ignored
     comment: str | None = Field(None, max_length=500)
     edits: dict | None = None
 
@@ -60,10 +63,12 @@ class ApproveBody(BaseModel):
 
 
 class RejectBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # unknown fields are rejected, not ignored
     reason: str = Field(..., min_length=1, max_length=500)
 
 
 class FeedbackBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # unknown fields are rejected, not ignored
     session_id: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,64}$")
     message_id: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,32}$")
     rating: Literal[-1, 1]
@@ -72,11 +77,13 @@ class FeedbackBody(BaseModel):
 
 
 class TeachBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # unknown fields are rejected, not ignored
     text: str = Field(..., min_length=8, max_length=500)
     scenario: str = Field("global", pattern=r"^[a-z_]{1,40}$")
 
 
 class ChaosBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # unknown fields are rejected, not ignored
     target: str = Field(..., pattern=r"^[a-z_]{1,20}:[a-z_*0-9]{1,30}$")
     mode: Literal["fail", "timeout", "slow", "malformed", "flaky"]
     count: int | None = Field(None, ge=1, le=1000)
@@ -123,8 +130,7 @@ def create_app(runtime=None, auth_token=_UNSET) -> FastAPI:
         return {"version": __version__, "model": s.model, "fallback_models": list(s.fallback_models),
                 "gemini_credentials": s.has_gemini_credentials, "live_apis": s.live_apis}
 
-    @app.post("/api/chat")
-    async def chat(message: str = Form(""), session_id: str = Form(""), image: UploadFile | None = File(None)):
+    async def prepare_chat(message: str, session_id: str, image: UploadFile | None):
         if len(message) > MAX_MESSAGE_CHARS:
             raise HTTPException(status_code=413, detail=f"Message is longer than {MAX_MESSAGE_CHARS} characters.")
         if session_id and not SESSION_RE.match(session_id):
@@ -140,11 +146,53 @@ def create_app(runtime=None, auth_token=_UNSET) -> FastAPI:
         if not message.strip() and not images:
             raise HTTPException(status_code=400, detail="Send a message or an image.")
         rt = await get_runtime()
-        session_id = session_id or f"web-{uuid.uuid4().hex[:8]}"
-        result = await rt.chat(session_id, message.strip(), images)
+        return rt, message.strip(), session_id or f"web-{uuid.uuid4().hex[:8]}", images
+
+    @app.post("/api/chat")
+    async def chat(message: str = Form(""), session_id: str = Form(""), image: UploadFile | None = File(None)):
+        rt, text, session_id, images = await prepare_chat(message, session_id, image)
+        result = await rt.chat(session_id, text, images)
         out = result.to_dict()
         out.update(session_id=session_id, message_id=uuid.uuid4().hex[:10])
         return out
+
+    @app.post("/api/chat/stream")
+    async def chat_stream(message: str = Form(""), session_id: str = Form(""), image: UploadFile | None = File(None)):
+        """Same as /api/chat but streams progress (which agent/tool is running) as server-sent events, then the final
+        answer. Progress items are already redacted; the final answer only appears after the guardrails and the
+        grounding check, so streaming never shows text that failed verification."""
+        rt, text, session_id, images = await prepare_chat(message, session_id, image)
+        queue: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def on_event(item: dict) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, ("step", {"agent": item.get("agent"), "name": item.get("name"),
+                                                                  "type": item.get("type")}))
+
+        async def worker():
+            try:
+                result = await rt.chat(session_id, text, images, on_event=on_event)
+                out = result.to_dict()
+                out.update(session_id=session_id, message_id=uuid.uuid4().hex[:10])
+                await queue.put(("final", out))
+            except Exception as exc:  # noqa: BLE001 - never leak details over the stream
+                await queue.put(("error", {"detail": "The request failed. Nothing was changed."}))
+                rstore.log_event("ui_stream", None, "failure", type(exc).__name__)
+
+        async def events():
+            task = asyncio.create_task(worker())
+            try:
+                while True:
+                    kind, data = await queue.get()
+                    yield f"event: {kind}\ndata: {json.dumps(data, default=str)}\n\n"
+                    if kind in ("final", "error"):
+                        break
+            finally:
+                if not task.done():
+                    task.cancel()
+
+        return StreamingResponse(events(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
     @app.get("/api/actions")
     def list_actions(session_id: str | None = None, status: Literal["pending", "executed", "failed", "rejected"] | None = None):

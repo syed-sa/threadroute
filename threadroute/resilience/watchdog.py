@@ -72,6 +72,9 @@ def diagnose(window_minutes: float = 30, component: str | None = None) -> list[d
 
 def apply_remedy(component: str, action: str, provider: str | None = None, params: dict | None = None) -> dict:
     params = params or {}
+    from threadroute.perf.cache import invalidate
+
+    invalidate()  # remedies change which provider answers; drop cached lookups
     cfg = store.get_config(component)
     if action == "demote_provider" and provider:
         cfg.demoted[provider] = time.time() + float(params.get("seconds", DEMOTION_SECONDS))

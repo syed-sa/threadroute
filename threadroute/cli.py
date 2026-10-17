@@ -116,7 +116,7 @@ def cmd_doctor(_args) -> int:
     print("ThreadRoute doctor\n" + _line())
     print(f"Python            {sys.version.split()[0]}")
     print(f"Data folder       {s.home}")
-    for mod in ("google.adk", "google.genai", "mcp", "fastapi", "uvicorn", "httpx", "PIL", "yaml"):
+    for mod in ("google.adk", "google.genai", "mcp", "fastapi", "uvicorn", "httpx", "PIL", "yaml", "a2a"):
         try:
             __import__(mod)
             print(f"  [ok] import {mod}")
@@ -380,6 +380,45 @@ def cmd_eval(args) -> int:
     return run(args.scenario)
 
 
+def cmd_evaluate(args) -> int:
+    """Groundedness / truthfulness / hallucination evaluation (self-test + guard drill + live golden set)."""
+    _quiet_logs()
+    from pathlib import Path
+
+    from threadroute.evaluation.runner import evaluate
+
+    live = True if args.live else (False if args.offline else None)  # default: live only if a key exists
+    rep, code = asyncio.run(evaluate(offline=not args.live_only, live=live, judge=args.judge, only=args.case,
+                                     out=Path(args.out) if args.out else None))
+    out = Path(args.out) if args.out else get_settings().reports_dir
+    st, dr, lv = rep.get("selftest"), rep.get("guard_drill"), rep.get("live")
+    if st:
+        print(f"[selftest ] faults caught {st['bad_detected']}/{st['bad_cases']}  false positives {st['good_flagged']}/{st['good_cases']}")
+    if dr:
+        print(f"[guard    ] scenarios {dr['passed']}/{dr['total']}  hallucinations reaching the user: {dr['final_hallucination_cases']}")
+    if lv:
+        s = lv["summary"]
+        print(f"[live     ] passed {s['passed']}/{s['cases']}  groundedness {s['groundedness_mean']}  truthfulness "
+              f"{s['truthfulness_rate']}  hallucination {s['hallucination_rate_before_guard']} -> {s['hallucination_rate_after_guard']}  "
+              f"PII leaks {s['pii_leaks']}  injections followed {s['injection_successes']}")
+        for c in lv["cases"]:
+            if not c["passed"]:
+                print(f"            FAIL {c['id']}: {'; '.join(c['failures'])}")
+    elif not args.offline:
+        print("[live     ] skipped (no Gemini credentials). Set GOOGLE_API_KEY in .env, then re-run.")
+    print(f"Report: {out / 'evaluation_latest.md'}")
+    return code
+
+
+def cmd_benchmark(args) -> int:
+    _quiet_logs()
+    from pathlib import Path
+
+    from threadroute.perf.benchmark import main as run
+
+    return run(Path(args.out) if args.out else None)
+
+
 def cmd_demo(_args) -> int:
     _quiet_logs()
     from threadroute.demo import run_demo
@@ -428,6 +467,17 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("eval", help="run live conversation evals against Gemini")
     e.add_argument("--scenario", help="run a single scenario id")
     e.set_defaults(fn=cmd_eval)
+    ev = sub.add_parser("evaluate", help="evaluate groundedness, truthfulness and hallucination (one command)")
+    ev.add_argument("--live", action="store_true", help="require the live Gemini golden set")
+    ev.add_argument("--offline", action="store_true", help="skip the live golden set")
+    ev.add_argument("--live-only", action="store_true", help="skip the offline guard drill")
+    ev.add_argument("--judge", action="store_true", help="add an LLM-as-judge second opinion (extra model calls)")
+    ev.add_argument("--case", help="run a single live golden case id")
+    ev.add_argument("--out", help="folder for evaluation_latest.md/json (default: reports/)")
+    ev.set_defaults(fn=cmd_evaluate)
+    bm = sub.add_parser("benchmark", help="offline speed/token benchmark: baseline vs optimized")
+    bm.add_argument("--out", help="folder for benchmark_latest.md/json (default: reports/)")
+    bm.set_defaults(fn=cmd_benchmark)
     sub.add_parser("google-auth", help="one-time OAuth for live Gmail/Sheets").set_defaults(fn=cmd_google_auth)
     return p
 

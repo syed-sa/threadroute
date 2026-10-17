@@ -48,6 +48,9 @@ def set_rule(target: str, mode: str, count: int | None = None, rate: float = 1.0
     if mode not in MODES:
         raise ValueError(f"mode must be one of {sorted(MODES)}")
     _rules_probe.clear()
+    from threadroute.perf.cache import invalidate
+
+    invalidate()  # cached answers must not hide an experiment
     conn = app_conn()
     try:
         conn.execute("INSERT INTO chaos_rules (target, mode, remaining, rate, delay_s) VALUES (?,?,?,?,?) "
@@ -61,6 +64,9 @@ def set_rule(target: str, mode: str, count: int | None = None, rate: float = 1.0
 
 def clear(target: str | None = None) -> None:
     _rules_probe.clear()
+    from threadroute.perf.cache import invalidate
+
+    invalidate()
     conn = app_conn()
     try:
         if target:

@@ -76,7 +76,13 @@ def list_actions(session_id: str | None = None, status: str | None = None, limit
         conn.close()
 
 
+_UPDATABLE = {"status", "decided_at", "decision_comment", "payload_json", "result_json"}
+
+
 def _update(action_id: str, **fields) -> None:
+    unknown = set(fields) - _UPDATABLE  # column names are interpolated into SQL, so they are allow-listed
+    if unknown:
+        raise ValueError(f"cannot update columns {sorted(unknown)}")
     conn = _conn()
     try:
         sets = ", ".join(f"{k}=?" for k in fields)

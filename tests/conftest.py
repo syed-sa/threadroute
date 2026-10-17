@@ -13,6 +13,7 @@ def tr_env(tmp_path, monkeypatch):
     monkeypatch.setenv("THREADROUTE_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("THREADROUTE_LIVE_APIS", "false")
     monkeypatch.setenv("THREADROUTE_MODEL", "scripted")
+    monkeypatch.setenv("THREADROUTE_CACHE_TTL", "0")  # tests see every call; cache has its own tests
     for var in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_MAPS_API_KEY", "CARRIER_API_BASE_URL"):
         monkeypatch.delenv(var, raising=False)
     from threadroute.resilience import breaker, store

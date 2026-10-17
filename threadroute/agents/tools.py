@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 from typing import Literal
@@ -68,27 +69,29 @@ async def get_reroute_options(shipment_id: str) -> dict:
     for item in s["items"]:
         weight += item["qty"] * C.UNIT_WEIGHT_KG[wms.get_sku(item["sku"])["category"]]
     here = f"{s['last_lat']},{s['last_lon']}" if s.get("last_lat") else s["origin_id"]
-    weather = await integrations.get_weather_risk(s["last_location"] or s["origin_id"])
-    tracking = await integrations.track_shipment(s["shipment_id"])
     from datetime import date, timedelta
     promised = date.fromisoformat(s["promised_date"])
+    combos = [(carrier, cfg, mode) for carrier, cfg in C.CARRIERS.items() for mode in cfg["modes"]
+              if not (carrier == s["carrier"] and mode == s["mode"])]
+    # the weather, tracking and every route estimate are independent calls: run them concurrently
+    # (latency = the slowest call instead of the sum of ~10 calls)
+    weather, tracking, *routes = await asyncio.gather(
+        integrations.get_weather_risk(s["last_location"] or s["origin_id"]),
+        integrations.track_shipment(s["shipment_id"]),
+        *[integrations.estimate_route(here, s["destination_id"], mode) for _c, _cfg, mode in combos])
     options = []
-    for carrier, cfg in C.CARRIERS.items():
-        for mode in cfg["modes"]:
-            if carrier == s["carrier"] and mode == s["mode"]:
-                continue
-            route = await integrations.estimate_route(here, s["destination_id"], mode)
-            if route.get("ok") is False:
-                continue
-            hours = route["duration_hours"] + 12  # re-booking / pickup lead time
-            arrival = date.today() + timedelta(days=math.ceil(hours / 24))
-            options.append({
-                "carrier": carrier, "mode": mode, "est_transit_hours": round(hours, 1),
-                "est_arrival_date": arrival.isoformat(),
-                "est_cost_inr": round(weight * route["distance_km"] * cfg["rate_per_kg_km"][mode]),
-                "meets_promised_date": arrival <= promised,
-                "exposed_to_weather_risk": mode != "air" and weather.get("risk_level") in ("high", "severe"),
-            })
+    for (carrier, cfg, mode), route in zip(combos, routes):
+        if route.get("ok") is False:
+            continue
+        hours = route["duration_hours"] + 12  # re-booking / pickup lead time
+        arrival = date.today() + timedelta(days=math.ceil(hours / 24))
+        options.append({
+            "carrier": carrier, "mode": mode, "est_transit_hours": round(hours, 1),
+            "est_arrival_date": arrival.isoformat(),
+            "est_cost_inr": round(weight * route["distance_km"] * cfg["rate_per_kg_km"][mode]),
+            "meets_promised_date": arrival <= promised,
+            "exposed_to_weather_risk": mode != "air" and weather.get("risk_level") in ("high", "severe"),
+        })
     options.sort(key=lambda o: o["est_arrival_date"])
     return {
         "shipment_id": s["shipment_id"], "units": s["total_units"], "approx_weight_kg": round(weight),
