@@ -1,0 +1,10 @@
+# Token price table (USD per 1,000,000 tokens). THESE ARE PLACEHOLDERS - confirm against Google's current
+# pricing page for the models you actually use, then edit. Unknown models fall back to `default`.
+# Cost shown in the UI/benchmark = tokens x these numbers, nothing more.
+currency: USD
+default: {input: 0.30, output: 2.50, cached_input: 0.075}
+models:
+  gemini-3.8-flash: {input: 0.30, output: 2.50, cached_input: 0.075}
+  gemini-3.6-flash: {input: 0.30, output: 2.50, cached_input: 0.075}
+  gemini-3.5-flash-lite: {input: 0.10, output: 0.40, cached_input: 0.025}
+  scripted: {input: 0.0, output: 0.0, cached_input: 0.0}

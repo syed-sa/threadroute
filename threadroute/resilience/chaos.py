@@ -12,10 +12,32 @@ from __future__ import annotations
 
 import asyncio
 import random
+import time
 
 from threadroute.resilience.store import app_conn
 
 MODES = {"fail", "timeout", "slow", "malformed", "flaky"}
+
+
+_rules_probe: dict[str, tuple[float, bool]] = {}
+PROBE_TTL_S = 1.0
+
+
+def _any_rules() -> bool:
+    """Cheap 'is chaos active?' probe, cached ~1s, so normal operation never opens the database here."""
+    from threadroute.config import get_settings
+
+    key = str(get_settings().app_db)
+    hit = _rules_probe.get(key)
+    if hit and time.monotonic() - hit[0] < PROBE_TTL_S:
+        return hit[1]
+    conn = app_conn()
+    try:
+        present = conn.execute("SELECT 1 FROM chaos_rules LIMIT 1").fetchone() is not None
+    finally:
+        conn.close()
+    _rules_probe[key] = (time.monotonic(), present)
+    return present
 
 
 class InjectedFailure(RuntimeError):
@@ -25,6 +47,7 @@ class InjectedFailure(RuntimeError):
 def set_rule(target: str, mode: str, count: int | None = None, rate: float = 1.0, delay_s: float = 0.0) -> None:
     if mode not in MODES:
         raise ValueError(f"mode must be one of {sorted(MODES)}")
+    _rules_probe.clear()
     conn = app_conn()
     try:
         conn.execute("INSERT INTO chaos_rules (target, mode, remaining, rate, delay_s) VALUES (?,?,?,?,?) "
@@ -37,6 +60,7 @@ def set_rule(target: str, mode: str, count: int | None = None, rate: float = 1.0
 
 
 def clear(target: str | None = None) -> None:
+    _rules_probe.clear()
     conn = app_conn()
     try:
         if target:
@@ -70,6 +94,8 @@ def _find_rule(conn, target: str):
 async def apply(target: str) -> str | None:
     """Called before a provider runs. Raises for fail/timeout/flaky, sleeps for slow, and returns
     'malformed' so the caller can corrupt the response afterwards."""
+    if not _any_rules():
+        return None
     conn = app_conn()
     try:
         rule = _find_rule(conn, target)
