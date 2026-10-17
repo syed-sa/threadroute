@@ -69,6 +69,10 @@ def invalidate_config_cache() -> None:
     _config_cache.clear()
 
 
+# Components whose calls legitimately take longer than the 8s default (an LLM agent answers inside the call).
+COMPONENT_DEFAULTS = {"a2a": {"timeout": 60.0, "max_retries": 1}}
+
+
 def _load_config(component: str) -> ComponentConfig:
     conn = app_conn()
     try:
@@ -76,6 +80,8 @@ def _load_config(component: str) -> ComponentConfig:
     finally:
         conn.close()
     cfg = ComponentConfig()
+    for k, v in COMPONENT_DEFAULTS.get(component, {}).items():
+        setattr(cfg, k, v)
     if row:
         data = json.loads(row["json"])
         for k, v in data.items():

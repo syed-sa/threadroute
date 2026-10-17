@@ -311,8 +311,65 @@ def cmd_web(args) -> int:
     _quiet_logs()
     import uvicorn
 
-    print(f"ThreadRoute UI on http://{args.host}:{args.port}")
+    from threadroute.ui.app import resolve_auth_token
+
+    token = resolve_auth_token()  # picked before the app module is imported so the app uses the same one
+    if token is not None:
+        os.environ["THREADROUTE_AUTH_TOKEN"] = token
+        print(f"ThreadRoute UI - open this URL (it carries your access token):\n"
+              f"  http://{args.host}:{args.port}/#token={token}")
+    else:
+        print(f"ThreadRoute UI on http://{args.host}:{args.port}  (AUTH DISABLED - local experiments only)")
+    if args.carrier_agent_port and get_settings().has_gemini_credentials:
+        try:  # run the carrier agent as its own A2A server so agent-to-agent traffic crosses a real network hop
+            from threadroute.a2a.client import a2a_token
+            from threadroute.a2a.peer import build_carrier_app, serve_in_thread
+
+            serve_in_thread(build_carrier_app(None, token=a2a_token(), port=args.carrier_agent_port),
+                            "127.0.0.1", args.carrier_agent_port)
+            os.environ["THREADROUTE_A2A_URL"] = f"http://127.0.0.1:{args.carrier_agent_port}"
+            print(f"Carrier-desk agent (A2A) running on http://127.0.0.1:{args.carrier_agent_port}")
+        except Exception as exc:  # noqa: BLE001 - falls back to the in-process A2A peer
+            print(f"(carrier agent server not started: {type(exc).__name__}; using the in-process A2A peer)")
     uvicorn.run("threadroute.ui.app:app", host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
+def cmd_a2a_carrier(args) -> int:
+    _quiet_logs()
+    import uvicorn
+
+    from threadroute.a2a.client import a2a_token
+    from threadroute.a2a.peer import build_carrier_app
+    from threadroute.config import load_env
+
+    load_env()
+    token = a2a_token()
+    print(f"Carrier-desk agent (A2A) on http://{args.host}:{args.port}\n"
+          f"  Agent Card: http://{args.host}:{args.port}/.well-known/agent-card.json\n"
+          f"  To let ThreadRoute use it, start the web app with:\n"
+          f"    THREADROUTE_A2A_URL=http://{args.host}:{args.port}  THREADROUTE_A2A_TOKEN=<same token>\n"
+          f"  (token is taken from THREADROUTE_A2A_TOKEN; this run's token: {token})")
+    uvicorn.run(build_carrier_app(None, token=token, host=args.host, port=args.port), host=args.host,
+                port=args.port, log_level="warning")
+    return 0
+
+
+def cmd_a2a_serve(args) -> int:
+    _quiet_logs()
+    import uvicorn
+
+    from threadroute.a2a.client import a2a_token
+    from threadroute.a2a.peer import build_threadroute_app
+    from threadroute.config import load_env
+
+    load_env()
+    token = a2a_token()
+    print(f"ThreadRoute as an A2A server on http://{args.host}:{args.port}\n"
+          f"  Agent Card: http://{args.host}:{args.port}/.well-known/agent-card.json\n"
+          f"  Auth: Authorization: Bearer <THREADROUTE_A2A_TOKEN>  (this run's token: {token})")
+    uvicorn.run(build_threadroute_app(None, token=token, host=args.host, port=args.port), host=args.host,
+                port=args.port, log_level="warning")
     return 0
 
 
@@ -344,7 +401,17 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("web", help="start the web UI")
     w.add_argument("--host", default="127.0.0.1")
     w.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
+    w.add_argument("--carrier-agent-port", type=int, default=8101,
+                   help="run the carrier-desk A2A agent on this port (0 = use the in-process peer only)")
     w.set_defaults(fn=cmd_web)
+    ac = sub.add_parser("a2a-carrier", help="run the carrier-desk agent as its own A2A server")
+    ac.add_argument("--host", default="127.0.0.1")
+    ac.add_argument("--port", type=int, default=8101)
+    ac.set_defaults(fn=cmd_a2a_carrier)
+    asv = sub.add_parser("a2a-serve", help="expose ThreadRoute's orchestrator as an A2A server for other agents")
+    asv.add_argument("--host", default="127.0.0.1")
+    asv.add_argument("--port", type=int, default=8102)
+    asv.set_defaults(fn=cmd_a2a_serve)
     sub.add_parser("mcp", help="run the WMS MCP server on stdio").set_defaults(fn=cmd_mcp)
     sub.add_parser("demo", help="offline end-to-end demo (no API key needed)").set_defaults(fn=cmd_demo)
     ch = sub.add_parser("chaos", help="inject failures to watch self-healing")

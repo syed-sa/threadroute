@@ -115,7 +115,7 @@ async def test_reroute_return_and_email_actions():
 
 async def test_list_filters():
     a = make()
-    make("send_email", {"to": "a@b.com", "subject": "Hello", "body": "A long enough email body."})
+    make("send_email", {"to": "ops@aurelio-menswear.example.com", "subject": "Hello", "body": "A long enough email body."})
     await service.reject(a["id"], "no")
     assert len(service.list_actions(status="pending")) == 1
     assert len(service.list_actions(session_id="s1")) == 2

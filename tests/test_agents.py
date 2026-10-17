@@ -31,6 +31,16 @@ ALLOC_PROPOSAL = dict(from_location="ST-HYD-BJH", to_location="ST-BLR-IND", sku=
                       rationale="Bengaluru has 0 stock")
 
 
+def _png_bytes(size=(64, 48)) -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", size, "navy").save(buf, "PNG")
+    return buf.getvalue()
+
+
 async def test_orchestrator_routes_to_specialist_and_queues_proposal(runtime, scripted):
     scripted.script = [transfer("allocation_agent"),
                        call("find_donor_stores", sku="SH-OXF-WHT", size="L", to_location_id="ST-BLR-IND", needed_qty=30),
@@ -103,11 +113,18 @@ async def test_learned_guidance_is_injected_into_the_specialist_prompt(runtime, 
     assert "LEARNED OPERATING GUIDANCE" not in instruction_of(scripted.seen[0])  # orchestrator: rule is not relevant
 
 
-async def test_image_reaches_the_model(runtime, scripted):
+async def test_image_reaches_the_model_after_sanitising(runtime, scripted):
     scripted.script = [say("I see an image.")]
-    await runtime.chat("s1", "what is this?", images=[(b"\x89PNG-not-really", "image/png")])
+    res = await runtime.chat("s1", "what is this?", images=[(_png_bytes(), "image/png")])
     parts = [p for c in scripted.seen[0].contents for p in (c.parts or [])]
-    assert any(getattr(p, "inline_data", None) and p.inline_data.mime_type == "image/png" for p in parts)
+    assert any(getattr(p, "inline_data", None) and p.inline_data.mime_type == "image/jpeg" for p in parts)
+    assert any("metadata" in n for n in res.notices)
+
+
+async def test_fake_image_is_rejected_before_the_model(runtime, scripted):
+    scripted.script = [say("should not be called")]
+    res = await runtime.chat("s1", "what is this?", images=[(b"\x89PNG-not-really", "image/png")])
+    assert res.error == "invalid_image" and not scripted.seen
 
 
 async def test_image_findings_flow_from_intake_to_claims_agent(runtime, scripted):
@@ -120,7 +137,7 @@ async def test_image_findings_flow_from_intake_to_claims_agent(runtime, scripted
              severity="moderate", affected_units=12, evidence_summary="Photo shows crushed corners on two cartons."),
         say("Queued claim ACT-1001."),
     ]
-    r = await runtime.chat("s1", "look at this", images=[(b"img", "image/png")])
+    r = await runtime.chat("s1", "look at this", images=[(_png_bytes(), "image/png")])
     findings = next(t for t in r.trace if t["type"] == "tool_result" and t["name"] == "get_image_findings")
     assert "SH-1002" in findings["result"] and "crushed_carton" in findings["result"]
     assert {t["agent"] for t in r.trace} >= {"intake_agent", "exceptions_claims_agent"}
@@ -136,7 +153,7 @@ async def test_invalid_image_findings_are_rejected_with_guidance(runtime, script
 
     scripted.script = [transfer("intake_agent"),
                        call("record_image_findings", image_type="selfie", summary="Not a logistics image at all."), check]
-    await runtime.chat("s1", "x", images=[(b"img", "image/png")])
+    await runtime.chat("s1", "x", images=[(_png_bytes(), "image/png")])
     assert seen[0]["status"] == "invalid"
 
 

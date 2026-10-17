@@ -15,6 +15,7 @@ import re
 from datetime import datetime, timezone
 
 from threadroute import db
+from threadroute.guardrails import audit, egress, injection
 from threadroute.resilience.store import app_conn
 
 SCHEMA = """
@@ -89,6 +90,7 @@ def looks_directive(text: str | None) -> bool:
 def record_feedback(kind: str, rating: int, comment: str | None = None, session_id: str | None = None,
                     target_type: str | None = None, target_id: str | None = None, agent: str | None = None,
                     scenario: str | None = None, edit: dict | None = None) -> int:
+    comment = egress.protect("store", comment) if comment else comment
     conn = _conn()
     try:
         cur = conn.execute(
@@ -105,9 +107,12 @@ def record_feedback(kind: str, rating: int, comment: str | None = None, session_
 def learn_guidance(text: str, scenario: str = "global", source_feedback_id: int | None = None,
                    extra_tags: set[str] | None = None) -> dict:
     """Create a rule, or reinforce a near-duplicate one."""
-    text = " ".join(text.split())
+    text = " ".join(egress.protect("store", text or "").split())
     if len(text) < 8:
         return {"created": False, "reason": "too short"}
+    if injection.find_injections(text):  # a rule is injected into prompts later: never let it carry instructions
+        audit.record("guidance", "PROMPT_INJECTION", 1, "rejected")
+        return {"created": False, "reason": "rule rejected: it looks like an instruction to override safety rules"}
     tags = extract_tags(text) | (extra_tags or set())
     new_tokens = tokens(text)
     conn = _conn()

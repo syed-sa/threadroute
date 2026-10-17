@@ -7,6 +7,7 @@ import csv
 
 from threadroute import db
 from threadroute.config import get_settings
+from threadroute.guardrails import egress
 from threadroute.integrations.models import SheetResult
 from threadroute.resilience.resilient import Provider, resilient_call
 
@@ -40,6 +41,7 @@ async def _csv(tab: str, values: list[str]) -> dict:
 
 
 async def log_action(tab: str, values: list[str]) -> dict:
+    values = egress.protect("sheets", [str(v) for v in values])
     s = get_settings()
     providers = []
     if s.live_apis and s.oauth_credentials and s.sheet_id:

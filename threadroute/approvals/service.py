@@ -11,6 +11,7 @@ from threadroute import db
 from threadroute.approvals import executor
 from threadroute.approvals.models import PAYLOAD_MODELS
 from threadroute.feedback import store as fb
+from threadroute.guardrails import egress
 from threadroute.resilience.store import app_conn
 
 SCHEMA = """
@@ -86,6 +87,8 @@ def _update(action_id: str, **fields) -> None:
 
 
 async def approve(action_id: str, comment: str | None = None, edits: dict | None = None) -> dict:
+    comment = egress.protect("store", comment) if comment else comment
+    edits = egress.protect("store", edits) if edits else edits
     action = get(action_id)
     if not action:
         return {"ok": False, "error": f"No action '{action_id}'."}
@@ -114,6 +117,7 @@ async def approve(action_id: str, comment: str | None = None, edits: dict | None
 
 
 async def reject(action_id: str, reason: str) -> dict:
+    reason = egress.protect("store", reason) if reason else reason
     action = get(action_id)
     if not action:
         return {"ok": False, "error": f"No action '{action_id}'."}

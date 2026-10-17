@@ -13,6 +13,7 @@ from mcp.client.stdio import stdio_client
 from pydantic import BaseModel, ConfigDict
 
 from threadroute import integrations
+from threadroute.guardrails import egress
 from threadroute.config import REPO_ROOT, get_settings, mcp_errlog
 from threadroute.domain import wms
 from threadroute.resilience.resilient import AllProvidersFailed, Provider, resilient_call
@@ -126,4 +127,7 @@ async def execute(kind: str, payload: dict) -> dict:
     except AllProvidersFailed as exc:
         res = {"ok": False, "error": {"code": "SERVICE_UNAVAILABLE", "message": str(exc)}}
         step("execute", False, res)
+    except egress.RecipientBlocked as exc:
+        res = {"ok": False, "error": {"code": "RECIPIENT_BLOCKED", "message": str(exc)}}
+        step("send_email", False, res)
     return {"status": "executed" if res.get("ok") else "failed", "steps": steps, "result": res}

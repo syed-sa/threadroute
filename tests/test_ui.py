@@ -13,7 +13,7 @@ PROPOSAL = dict(from_location="ST-HYD-BJH", to_location="ST-BLR-IND", sku="SH-OX
 def client():
     llm = ScriptedLlm(script=[], seen=[])
     rt = ThreadRouteRuntime(model=llm)
-    c = TestClient(create_app(rt))
+    c = TestClient(create_app(rt, auth_token="test-token"), headers={"Authorization": "Bearer test-token"})
     c.llm = llm
     yield c
 
@@ -50,6 +50,16 @@ def test_approve_edit_and_reject_endpoints(client):
     assert any("Hyderabad" in g["text"] for g in client.get("/api/guidance").json())
 
 
+def _png() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 30), "navy").save(buf, "PNG")
+    return buf.getvalue()
+
+
 def test_image_upload_validation(client):
     bad = client.post("/api/chat", data={"message": "x"}, files={"image": ("notes.txt", b"hello", "text/plain")})
     assert bad.status_code == 415
@@ -58,7 +68,7 @@ def test_image_upload_validation(client):
     assert big.status_code == 413
     assert client.post("/api/chat", data={"message": "  "}).status_code == 400
     client.llm.script = [say("Looks like a carton.")]
-    ok = client.post("/api/chat", data={"message": "what is this"}, files={"image": ("a.png", b"\x89PNG", "image/png")})
+    ok = client.post("/api/chat", data={"message": "what is this"}, files={"image": ("a.png", _png(), "image/png")})
     assert ok.status_code == 200 and ok.json()["reply"] == "Looks like a carton."
 
 
@@ -67,7 +77,7 @@ def test_thumbs_feedback_and_teaching(client):
     down = client.post("/api/feedback", json={"session_id": "s", "rating": -1,
                                               "comment": "Always state the carrier name in delay summaries."}).json()
     assert down["learned"]["created"]
-    assert client.post("/api/feedback", json={"session_id": "s", "rating": 5}).status_code == 400
+    assert client.post("/api/feedback", json={"session_id": "s", "rating": 5}).status_code == 422
     assert client.post("/api/teach", json={"text": "Prefer rail for folded trousers on long lanes."}).json()["created"]
     gid = client.get("/api/guidance").json()[0]["id"]
     assert client.delete(f"/api/guidance/{gid}").json()["ok"]
@@ -75,9 +85,7 @@ def test_thumbs_feedback_and_teaching(client):
 
 def test_health_chaos_and_watchdog_endpoints(client):
     assert client.post("/api/chaos", json={"target": "carrier:primary_api", "mode": "fail"}).status_code == 200
-    assert client.post("/api/chaos", json={"target": "carrier:primary_api", "mode": "explode"}).status_code == 400
-    for _ in range(3):
-        client.get("/mock-carrier/v1/track/SH-1001")  # the mock carrier API is mounted
+    assert client.post("/api/chaos", json={"target": "carrier:primary_api", "mode": "explode"}).status_code == 422
     from threadroute import integrations
     import asyncio
     asyncio.run(integrations.track_shipment("SH-1001"))
@@ -96,6 +104,6 @@ def test_report_endpoint(client):
 
 
 def test_chat_without_credentials_returns_clear_503():
-    c = TestClient(create_app())
+    c = TestClient(create_app(auth_token=None))
     r = c.post("/api/chat", data={"message": "hello"})
     assert r.status_code == 503 and "GOOGLE_API_KEY" in r.json()["detail"]

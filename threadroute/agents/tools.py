@@ -21,6 +21,7 @@ from threadroute.approvals.models import PAYLOAD_MODELS
 from threadroute.domain import constants as C
 from threadroute.domain import wms
 from threadroute.feedback import store as fb
+from threadroute.guardrails import egress
 from threadroute.resilience import chaos, watchdog
 
 
@@ -41,6 +42,16 @@ async def estimate_route(origin: str, destination: str, mode: str = "road") -> d
 async def get_weather_risk(location: str, days: int = 3) -> dict:
     """Weather risk (low/moderate/high/severe/unknown) for a location id, city or hub name over the next days."""
     return await integrations.get_weather_risk(location, days)
+
+
+async def ask_carrier_agent(question: str, shipment_id: str = "") -> dict:
+    """Ask the CARRIER DESK agent (an independent agent run by the carriers, reached over the A2A protocol) about a
+    shipment: its own status view, a reroute quote for a mode (road/rail/air), or a pre-assessment of a damage /
+    shortage claim (say severity, units and whether photo evidence exists). Returns its reply, the transport used
+    and its reference ids. Quote its references in your proposals. If degraded=true it is a local snapshot."""
+    from threadroute.a2a.client import get_peer
+
+    return await get_peer().ask(question, shipment_id)
 
 
 async def get_reroute_options(shipment_id: str) -> dict:
@@ -170,6 +181,11 @@ def _precheck(kind: str, p: dict) -> list[str]:
                 errs.append(f"{p['new_carrier']} does not offer {p['new_mode']} (offers {C.CARRIERS[p['new_carrier']]['modes']}).")
             if (p["new_carrier"], p["new_mode"]) == (s["carrier"], s["mode"]):
                 errs.append("That is already the current carrier and mode.")
+        elif kind == "send_email":
+            try:
+                egress.check_recipient(p["to"])
+            except egress.RecipientBlocked as exc:
+                errs.append(str(exc) + " Ask the user to add the domain to THREADROUTE_ALLOWED_EMAIL_DOMAINS.")
         elif kind == "set_return_disposition":
             r = wms.get_return(p["return_id"])
             if r["status"] == "graded":
@@ -190,6 +206,8 @@ def _propose(tool_context: ToolContext, kind: str, payload: dict, summary: str, 
     errs = _precheck(kind, clean)
     if errs:
         return {"status": "invalid", "errors": errs, "fix": "Adjust the proposal and call the tool again. Nothing was queued."}
+    clean = egress.protect("store", clean)  # no personal data is ever stored in a proposal
+    summary, rationale = egress.protect("store", summary), egress.protect("store", rationale)
     session_id = tool_context.session.id if tool_context else "unknown"
     for existing in approvals.list_actions(session_id=session_id, status="pending"):
         if existing["kind"] == kind and existing["payload"] == clean:

@@ -37,6 +37,12 @@ def ensure_db() -> None:
         seed_database(path, reset=False)
 
 
+def known_contact_names() -> list[str]:
+    """Names in the (synthetic) contact table - registered with the PII detector so they are always masked."""
+    with _session() as conn:
+        return [r[0] for r in conn.execute("SELECT customer_name FROM return_contacts").fetchall()]
+
+
 def _session():
     ensure_db()
     return db.session(get_settings().wms_db)
@@ -219,6 +225,10 @@ def get_return(return_id: str) -> dict:
                          "JOIN skus s USING(sku) WHERE return_id=?", (return_id.upper(),))
         if not row:
             raise WmsError("RETURN_NOT_FOUND", f"No return '{return_id}'.")
+        contact = _one(conn, "SELECT customer_name, phone, email, address, note FROM return_contacts "
+                             "WHERE return_id=?", (return_id.upper(),))
+        if contact:  # the WMS holds this like any real system would; the guardrails keep it away from the model
+            row["customer_contact"] = contact
         return row
 
 

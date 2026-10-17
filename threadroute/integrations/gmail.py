@@ -11,6 +11,7 @@ from email.message import EmailMessage
 
 from threadroute import db
 from threadroute.config import get_settings
+from threadroute.guardrails import egress
 from threadroute.integrations.models import EmailResult
 from threadroute.resilience.resilient import Provider, resilient_call
 
@@ -49,6 +50,8 @@ async def _outbox(to: str, subject: str, body: str) -> dict:
 
 
 async def send_email(to: str, subject: str, body: str) -> dict:
+    to = egress.check_recipient(to)  # allow-listed business domains only
+    subject, body = egress.protect("email", subject), egress.protect("email", body)  # no PII/secrets leave
     s = get_settings()
     providers = []
     if s.live_apis and s.oauth_credentials:

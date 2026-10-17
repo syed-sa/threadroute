@@ -48,6 +48,8 @@ def _agent(name: str, description: str, prompt: str, model, tool_list: list, **k
         on_model_error_callback=callbacks.on_model_error,
         on_tool_error_callback=callbacks.on_tool_error,
         after_tool_callback=callbacks.after_tool,
+        before_model_callback=callbacks.before_model,
+        after_model_callback=callbacks.after_model,
         **kwargs,
     )
 
@@ -65,7 +67,7 @@ def build_root_agent(model=None) -> LlmAgent:
     tracking = _agent("tracking_agent", "Answers where a shipment is, why it is late, and its ETA (read-only).",
                       prompts.TRACKING, model,
                       [wms_toolset(MCP_BY_AGENT["tracking_agent"]), T.get_carrier_tracking, T.estimate_route,
-                       T.get_weather_risk])
+                       T.get_weather_risk, T.ask_carrier_agent])
     allocation = _agent("allocation_agent", "Fixes stock-outs and size-curve imbalances with inter-store transfers.",
                         prompts.ALLOCATION, model,
                         [wms_toolset(MCP_BY_AGENT["allocation_agent"]), T.propose_reallocation])
@@ -73,7 +75,7 @@ def build_root_agent(model=None) -> LlmAgent:
                         "claims for damage or shortage.", prompts.EXCEPTIONS, model,
                         [wms_toolset(MCP_BY_AGENT["exceptions_claims_agent"]), T.get_carrier_tracking,
                          T.get_weather_risk, T.estimate_route, T.get_reroute_options, T.get_image_findings,
-                         T.propose_reroute, T.propose_file_claim])
+                         T.ask_carrier_agent, T.propose_reroute, T.propose_file_claim])
     returns = _agent("returns_agent", "Grades returned garments and decides restock, refurbish, liquidate or recycle.",
                      prompts.RETURNS, model,
                      [wms_toolset(MCP_BY_AGENT["returns_agent"]), T.get_image_findings, T.propose_return_disposition])

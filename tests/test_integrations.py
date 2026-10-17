@@ -58,10 +58,10 @@ async def test_weather_levels_and_fallback():
 
 
 async def test_email_goes_to_outbox_file():
-    r = await integrations.send_email("a@b.com", "Hello there", "Body of the message")
+    r = await integrations.send_email("ops@aurelio-menswear.example.com", "Hello there", "Body of the message")
     assert r["status"] == "simulated"
     saved = json.loads(open(r["path"], encoding="utf-8").read())
-    assert saved["to"] == "a@b.com" and saved["subject"] == "Hello there"
+    assert saved["to"] == "ops@aurelio-menswear.example.com" and saved["subject"] == "Hello there"
 
 
 async def test_sheet_log_appends_csv_rows():
@@ -74,4 +74,4 @@ async def test_sheet_log_appends_csv_rows():
 async def test_live_mode_without_credentials_still_works(monkeypatch):
     monkeypatch.setenv("THREADROUTE_LIVE_APIS", "true")  # no keys configured -> live providers are not offered
     assert (await integrations.estimate_route("DC-BHW", "DC-GGN", "road"))["source"] == "route_model"
-    assert (await integrations.send_email("a@b.com", "Hello there", "Body of the message"))["status"] == "simulated"
+    assert (await integrations.send_email("ops@aurelio-menswear.example.com", "Hello there", "Body of the message"))["status"] == "simulated"
